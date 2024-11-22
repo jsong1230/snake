@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Trophy, Play, RotateCcw, Apple, Cherry, Grape, Banana, Zap } from 'lucide-react';
+import { Trophy, Play, RotateCcw, Apple, Cherry, Grape, Banana, Zap, Star } from 'lucide-react';
 import Snake from './Snake';
 import Food, { foodPoints, FoodType } from './Food';
+import Obstacle from './Obstacle';
 
 type Position = {
   x: number;
@@ -39,6 +40,8 @@ const INITIAL_EFFECTS: GameEffects = {
   invincible: false,
 };
 
+const LEVEL_THRESHOLDS = [0, 100, 300, 600, 1000, 1500, 2000, 3000, 4000, 5000];
+
 export default function Game() {
   const [snake, setSnake] = useState<Position[]>(INITIAL_SNAKE);
   const [food, setFood] = useState<FoodItem | null>(null);
@@ -49,16 +52,72 @@ export default function Game() {
   const [highScore, setHighScore] = useState(0);
   const [effects, setEffects] = useState<GameEffects>(INITIAL_EFFECTS);
   const [effectTimers, setEffectTimers] = useState<{ [key: string]: NodeJS.Timeout }>();
+  const [level, setLevel] = useState(1);
+  const [combo, setCombo] = useState(0);
+  const [comboTimer, setComboTimer] = useState<NodeJS.Timeout>();
+  const [obstacles, setObstacles] = useState<Position[]>([]);
+
+  const getCurrentLevel = useCallback((score: number) => {
+    return LEVEL_THRESHOLDS.findIndex((threshold, index) => 
+      score < LEVEL_THRESHOLDS[index + 1] || index === LEVEL_THRESHOLDS.length - 1
+    ) + 1;
+  }, []);
 
   const generateFood = useCallback(() => {
     const position = {
       x: Math.floor(Math.random() * GRID_SIZE),
       y: Math.floor(Math.random() * GRID_SIZE),
     };
+
+    // Ensure food doesn't spawn on obstacles or snake
+    const isValidPosition = !obstacles.some(obs => 
+      obs.x === position.x && obs.y === position.y
+    ) && !snake.some(segment => 
+      segment.x === position.x && segment.y === position.y
+    );
+
+    if (!isValidPosition) {
+      return generateFood();
+    }
+
     const types: FoodType[] = ['apple', 'cherry', 'grape', 'banana'];
     const type = types[Math.floor(Math.random() * types.length)];
     return { position, type };
-  }, []);
+  }, [obstacles, snake]);
+
+  const generateObstacle = useCallback(() => {
+    const position = {
+      x: Math.floor(Math.random() * GRID_SIZE),
+      y: Math.floor(Math.random() * GRID_SIZE),
+    };
+
+    // Ensure obstacle doesn't spawn on food, other obstacles, or snake
+    const isValidPosition = 
+      !obstacles.some(obs => obs.x === position.x && obs.y === position.y) &&
+      !snake.some(segment => segment.x === position.x && segment.y === position.y) &&
+      !(food && food.position.x === position.x && food.position.y === position.y);
+
+    if (!isValidPosition) {
+      return generateObstacle();
+    }
+
+    return position;
+  }, [obstacles, snake, food]);
+
+  const addObstacle = useCallback(() => {
+    const newObstacle = generateObstacle();
+    setObstacles(prev => [...prev, newObstacle]);
+  }, [generateObstacle]);
+
+  useEffect(() => {
+    // Add new obstacle every 30 seconds after level 2
+    if (level >= 2 && !isPaused && !isGameOver) {
+      const obstacleTimer = setInterval(() => {
+        addObstacle();
+      }, 30000);
+      return () => clearInterval(obstacleTimer);
+    }
+  }, [level, isPaused, isGameOver, addObstacle]);
 
   const resetGame = useCallback(() => {
     setSnake(INITIAL_SNAKE);
@@ -68,8 +127,23 @@ export default function Game() {
     setIsPaused(true);
     setScore(0);
     setEffects(INITIAL_EFFECTS);
+    setLevel(1);
+    setCombo(0);
+    setObstacles([]);
+    if (comboTimer) clearTimeout(comboTimer);
     Object.values(effectTimers || {}).forEach(timer => clearTimeout(timer));
-  }, [generateFood, effectTimers]);
+  }, [generateFood, effectTimers, comboTimer]);
+
+  const updateCombo = useCallback(() => {
+    setCombo(prev => prev + 1);
+    if (comboTimer) clearTimeout(comboTimer);
+    
+    const timer = setTimeout(() => {
+      setCombo(0);
+    }, 3000);
+    
+    setComboTimer(timer);
+  }, [comboTimer]);
 
   useEffect(() => {
     if (!food) {
@@ -82,19 +156,19 @@ export default function Game() {
     let duration = 0;
 
     switch (foodType) {
-      case 'apple': // Speed boost
+      case 'apple':
         newEffects.speedBoost = true;
         duration = 5000;
         break;
-      case 'cherry': // Ghost mode (pass through walls)
+      case 'cherry':
         newEffects.ghostMode = true;
         duration = 7000;
         break;
-      case 'grape': // Double points
+      case 'grape':
         newEffects.doublePoints = true;
         duration = 10000;
         break;
-      case 'banana': // Invincibility
+      case 'banana':
         newEffects.invincible = true;
         duration = 8000;
         break;
@@ -102,12 +176,10 @@ export default function Game() {
 
     setEffects(newEffects);
 
-    // Clear existing timer for this effect
     if (effectTimers?.[foodType]) {
       clearTimeout(effectTimers[foodType]);
     }
 
-    // Set new timer
     const timer = setTimeout(() => {
       setEffects(prev => ({ ...prev, [Object.keys(newEffects)[0]]: false }));
     }, duration);
@@ -117,13 +189,17 @@ export default function Game() {
 
   const checkCollision = useCallback((pos: Position) => {
     if (effects.ghostMode) {
-      // Wrap around the grid
       pos.x = (pos.x + GRID_SIZE) % GRID_SIZE;
       pos.y = (pos.y + GRID_SIZE) % GRID_SIZE;
       return false;
     }
     return pos.x < 0 || pos.x >= GRID_SIZE || pos.y < 0 || pos.y >= GRID_SIZE;
   }, [effects.ghostMode]);
+
+  const checkObstacleCollision = useCallback((pos: Position) => {
+    if (effects.invincible) return false;
+    return obstacles.some(obstacle => obstacle.x === pos.x && obstacle.y === pos.y);
+  }, [obstacles, effects.invincible]);
 
   const checkSelfCollision = useCallback((head: Position, snakeBody: Position[]) => {
     if (effects.invincible) return false;
@@ -145,7 +221,11 @@ export default function Game() {
         newHead.y = (newHead.y + GRID_SIZE) % GRID_SIZE;
       }
 
-      if (checkCollision(newHead) || checkSelfCollision(newHead, prevSnake)) {
+      if (
+        checkCollision(newHead) || 
+        checkSelfCollision(newHead, prevSnake) || 
+        checkObstacleCollision(newHead)
+      ) {
         setIsGameOver(true);
         if (score > highScore) {
           setHighScore(score);
@@ -156,8 +236,18 @@ export default function Game() {
       const newSnake = [newHead, ...prevSnake];
 
       if (food && newHead.x === food.position.x && newHead.y === food.position.y) {
-        const points = foodPoints[food.type] * (effects.doublePoints ? 2 : 1);
-        setScore(prev => prev + points);
+        const comboMultiplier = Math.min(combo + 1, 5);
+        const points = foodPoints[food.type] * (effects.doublePoints ? 2 : 1) * comboMultiplier;
+        const newScore = score + points;
+        setScore(newScore);
+        
+        // Update level
+        const newLevel = getCurrentLevel(newScore);
+        if (newLevel > level) {
+          setLevel(newLevel);
+        }
+
+        updateCombo();
         applyFoodEffect(food.type);
         setFood(generateFood());
       } else {
@@ -166,7 +256,11 @@ export default function Game() {
 
       return newSnake;
     });
-  }, [direction, food, isPaused, isGameOver, checkCollision, checkSelfCollision, generateFood, score, highScore, effects.doublePoints, applyFoodEffect]);
+  }, [
+    direction, food, isPaused, isGameOver, checkCollision, checkSelfCollision,
+    generateFood, score, highScore, effects.doublePoints, applyFoodEffect,
+    combo, level, getCurrentLevel, updateCombo, checkObstacleCollision
+  ]);
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
@@ -195,10 +289,18 @@ export default function Game() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, []);
 
+  const getGameSpeed = useCallback(() => {
+    let speed = BASE_SPEED - (level - 1) * 10;
+    if (effects.speedBoost) {
+      speed = BOOST_SPEED;
+    }
+    return Math.max(speed, 50); // Minimum speed cap
+  }, [level, effects.speedBoost]);
+
   useEffect(() => {
-    const gameLoop = setInterval(moveSnake, effects.speedBoost ? BOOST_SPEED : BASE_SPEED);
+    const gameLoop = setInterval(moveSnake, getGameSpeed());
     return () => clearInterval(gameLoop);
-  }, [moveSnake, effects.speedBoost]);
+  }, [moveSnake, getGameSpeed]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-emerald-500 to-teal-600 p-4">
@@ -209,10 +311,23 @@ export default function Game() {
             <span className="text-lg font-bold">High Score: {highScore}</span>
           </div>
           <div className="flex items-center gap-2">
+            <Star className="text-emerald-500" />
+            <span className="text-lg font-bold">Level {level}</span>
+          </div>
+          <div className="flex items-center gap-2">
             <Trophy className="text-emerald-500" />
             <span className="text-lg font-bold">Score: {score}</span>
           </div>
         </div>
+
+        {/* Combo Display */}
+        {combo > 0 && (
+          <div className="text-center mb-2">
+            <span className="inline-block bg-gradient-to-r from-yellow-400 to-red-500 text-white px-3 py-1 rounded-full text-sm font-bold animate-pulse">
+              {combo}x Combo!
+            </span>
+          </div>
+        )}
 
         {/* Active Effects Display */}
         <div className="flex gap-2 mb-2">
@@ -241,6 +356,13 @@ export default function Game() {
               cellSize={CELL_SIZE}
             />
           )}
+          {obstacles.map((obstacle, index) => (
+            <Obstacle
+              key={`${obstacle.x}-${obstacle.y}-${index}`}
+              position={obstacle}
+              cellSize={CELL_SIZE}
+            />
+          ))}
         </div>
 
         <div className="mt-4 flex justify-center gap-4">
@@ -264,6 +386,7 @@ export default function Game() {
           <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
             <div className="bg-white p-6 rounded-lg text-center">
               <h2 className="text-2xl font-bold mb-4">Game Over!</h2>
+              <p className="mb-2">Level: {level}</p>
               <p className="mb-4">Final Score: {score}</p>
               <button
                 onClick={resetGame}
