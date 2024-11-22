@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'framer-motion';
 import { Apple, Cherry, Grape, Banana } from 'lucide-react';
 
 export type FoodType = 'apple' | 'cherry' | 'grape' | 'banana';
@@ -9,6 +10,13 @@ type FoodProps = {
   cellSize: number;
 };
 
+const foodIcons = {
+  apple: Apple,
+  cherry: Cherry,
+  grape: Grape,
+  banana: Banana,
+};
+
 const foodColors = {
   apple: 'text-red-500',
   cherry: 'text-pink-500',
@@ -16,26 +24,22 @@ const foodColors = {
   banana: 'text-yellow-400',
 };
 
-const foodPoints = {
+export const foodPoints = {
   apple: 1,
   cherry: 2,
   grape: 3,
   banana: 5,
 };
 
-const FoodIcons = {
-  apple: Apple,
-  cherry: Cherry,
-  grape: Grape,
-  banana: Banana,
-};
-
 export default function Food({ type, position, cellSize }: FoodProps) {
-  const Icon = FoodIcons[type];
+  const Icon = foodIcons[type];
   
   return (
-    <div
-      className={`absolute ${foodColors[type]} transition-all duration-200 animate-bounce`}
+    <motion.div
+      initial={{ scale: 0 }}
+      animate={{ scale: 1 }}
+      exit={{ scale: 0 }}
+      className={`absolute ${foodColors[type]} transition-all duration-200`}
       style={{
         left: position.x * cellSize,
         top: position.y * cellSize,
@@ -43,9 +47,16 @@ export default function Food({ type, position, cellSize }: FoodProps) {
         height: cellSize,
       }}
     >
-      <Icon className="w-full h-full" />
-    </div>
+      <motion.div
+        animate={{ y: [0, -2, 0] }}
+        transition={{ 
+          duration: 1.5,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      >
+        <Icon className="w-full h-full" />
+      </motion.div>
+    </motion.div>
   );
 }
-
-export { foodPoints };
